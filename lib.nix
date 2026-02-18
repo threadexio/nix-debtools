@@ -60,10 +60,12 @@ lib.makeExtensible (debTools: {
   debify = drv: args:
     drv.overrideAttrs (final: prev:
       let
+        inherit (drv.stdenv) hostPlatform;
+
         control = {
           Package = "${prev.name or prev.pname}";
           Version = "${prev.version or "0.0.0"}";
-          Architecture = drv.stdenv.hostPlatform.go.GOARCH;
+          Architecture = hostPlatform.go.GOARCH;
         }
         // (lib.optionalAttrs (lib.hasAttr "meta" prev) {
           Maintainer = map
@@ -77,6 +79,8 @@ lib.makeExtensible (debTools: {
 
         controlFormat = debTools.formats.control { };
         controlFile = controlFormat.generate "control" control;
+
+        libArchDirName = "${hostPlatform.parsed.cpu.name}-${hostPlatform.parsed.kernel.name}-${hostPlatform.parsed.abi.name}";
       in
       {
         passthru = args // {
@@ -93,6 +97,7 @@ lib.makeExtensible (debTools: {
           dpkg
           fakeroot
           patchelf
+          binutils
         ]
         ++ (prev.nativeBuildInputs or [ ]);
 
@@ -126,20 +131,100 @@ lib.makeExtensible (debTools: {
 
           runHook preFixup
 
-          if find $out/. -type l -exec realpath -m {} \; | grep -q /nix/store; then
-            echo "found a symlink pointing inside /nix/store"
-            exit 1
-          fi
+          prefix="usr"
+          libPath="/$prefix/lib/${libArchDirName}/${final.pname or final.name}"
 
-          if find $out/. -type f -executable -exec patchelf --print-interpreter {} \; 2>/dev/null | grep -q /nix/store; then
-            echo "found an executable whose interpreter references /nix/store"
-            exit 1
-          fi
+          function isSymlink {
+            [ -L "$1" ]
+          }
 
-          if find $out/. -type f -executable -exec grep -E "^#!" {} \; 2>/dev/null | grep -q /nix/store; then
-            echo "found a script whose shebang references /nix/store"
-            exit 1
-          fi
+          function isDynamicELF {
+            readelf -l "$1" | grep -q "INTERP"
+          }
+
+          function installDynamicLibraries {
+            local elf="$1"
+
+            ldd "$elf" | awk '{print $1, $3}' | grep -v -e linux-vdso -e ld-linux | \
+            while IFS=" " read -r lib path; do
+              install -m555 "$path" "$out$libPath/$lib"
+              installDynamicLibraries "$out$libPath/$lib"
+            done || true
+
+            local mode="$(stat -c '%a' "$elf")"
+            chmod u+w "$elf"
+            patchelf --set-rpath "$libPath" "$elf"
+            chmod "$mode" "$elf"
+          }
+
+          function patchDynamicExecutable {
+            local exe="$1"
+            local interpreter="$(patchelf --print-interpreter "$exe")"
+            local name="$(basename "$interpreter")"
+            local mode="$(stat -c '%a' "$exe")"
+
+            install -Dm555 "$interpreter" "$out$libPath/$name"
+
+            chmod u+w "$exe"
+            patchelf --set-interpreter "$libPath/$name" "$exe"
+            chmod "$mode" "$exe"
+
+            installDynamicLibraries "$exe"
+          }
+
+          function patchScript {
+            local script="$1"
+            local timestamp="$(stat -c '%y' "$script")"
+            local mode="$(stat -c '%a' "$script")"
+            local temp_script="$(mktemp -t patchScript.XXXXXXX)"
+
+            chmod 600 "$temp_script"
+            cat "$script" > "$temp_script"
+
+            local line interpreter args name
+            cat "$temp_script" | awk 'match($0, /#!\s*(\S+)\s*(.*)$/, a) {printf a[0] "\1" a[1] "\1" a[2] "\0"}' | \
+            while IFS=$'\1' read -r -d $'\0' line interpreter args; do
+              if [[ ! "$interpreter" == "$NIX_STORE"* ]]; then
+                continue
+              fi
+
+              name="$(basename "$interpreter")"
+              install -Dm555 "$interpreter" "$out$libPath/$name"
+              patchDynamicExecutable "$out$libPath/$name"
+
+              sed -i "s|^$line\$|#! $libPath/$name $args|gm" "$temp_script"
+            done
+
+            chmod u+w "$script"
+            cat "$temp_script" > "$script"
+            chmod "$mode" "$script"
+
+            touch --date "$timestamp" "$script"
+          }
+
+          find $out -type f -print0 | \
+          while IFS= read -r -d $'\0' file; do
+            if isELF "$file"; then
+              if isDynamicELF "$file"; then
+                patchDynamicExecutable "$file"
+                continue
+              fi
+            fi
+
+            if isScript "$file"; then
+              patchScript "$file"
+              continue
+            fi
+
+            if isSymlink "$file"; then
+              if realpath -m "$file" | grep -q "$NIX_STORE"; then
+                echo "$file is a symlink pointing the nix store"
+                exit 1
+              fi
+
+              continue
+            fi
+          done
 
           runHook postFixup
         '';

@@ -3,4 +3,4 @@
   }
 }:
 
-pkgs.pkgsStatic.callPackage ./package.nix { }
+pkgs.callPackage ./package.nix { }

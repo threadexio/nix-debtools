@@ -66,32 +66,33 @@ from `args`). If you package needs dependencies from Debian's repos, you need
 to specify them manually via `control.Depends`, `control.Conflicts`, etc.
 Dependencies are not tracked automatically.
 
-The creation of the `.deb` archive happens in a special custom phase called
+The creation of the `.deb` archive happens in a special post phase called
 `debPhase`. The normal hook convention of `preDeb` and `postDeb` apply, so if
 you need to do things before or after use them.
 
 ### Examples
 
 ```nix
-{ pkgsStatic
+{ hello
 , debTools
 , ...
 }:
 
-debTools.debify pkgsStatic.hello {}
+debTools.debify hello {}
 ```
 
-Also see: [`examples/`](./examples).
-
 > [!NOTE]
-> We need to provide `hello` from `pkgsStatic` because otherwise the built
-> binary will have references to `/nix/store` which is not available on Debian
-> systems and is thus disallowed. Most architecture-dependent packages will have
-> to be built this way. The alternative is to figure out what versions of your
-> dependencies exist in the Debian repos, pin the same version in the derivation
-> and setup the toolchain to link to standard FHS paths. At that point you might
-> as well forego this entire hack of a flake and add proper support for Debian
-> packages.
+> All dependencies of the derivation will be brought along in the `.deb`
+> package. This means any libraries, interpreters, etc will be contained in
+> `.deb` package. Since we cannot ensure that the versions of the libraries we
+> build against in Nix will be available in Debian, we have to bring them along.
+> For example, if a shell script wants the `/nix/store/XXXX-bash-X.X.X/bin/bash`
+> interpreter, then that specific version of bash (and any dependencies of
+> it) will be bundled inside the `.deb` package. The same also applies for
+> dynamically linked executables. If possible, prefer building static binaries
+> and using pre-installed script interpreters.
+
+Also see: [`examples/`](./examples).
 
 ## `pkgs.debTools.formats.control`
 

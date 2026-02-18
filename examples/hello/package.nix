@@ -1,10 +1,8 @@
 { stdenv
+, openssl
 , debTools
 , ...
 }:
-
-# Note how we use `pkgs.pkgsStatic.callPackage` instead of just `pkgs` in
-# `default.nix`.
 
 let
   drv = stdenv.mkDerivation {
@@ -12,10 +10,14 @@ let
 
     src = ./.;
 
+    nativeBuildInputs = [
+      openssl
+    ];
+
     buildPhase = ''
       runHook preBuild
 
-      $CC hello.c -o hello
+      $CC hello.c -o hello -lssl -lcrypto
 
       runHook postBuild
     '';
@@ -23,7 +25,7 @@ let
     installPhase = ''
       runHook preInstall
 
-      install -m755 ./hello $out/usr/bin/hello
+      install -Dm755 ./hello $out/usr/bin/hello
 
       runHook postInstall
     '';
