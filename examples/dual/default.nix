@@ -3,4 +3,7 @@
   }
 }:
 
-pkgs.callPackage ./package.nix { }
+rec {
+  default = pkgs.callPackage ./package.nix { };
+  deb = default.deb;
+}

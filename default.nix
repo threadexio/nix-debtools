@@ -1,3 +1,6 @@
 final: prev: {
-  debTools = (prev.debTools or { }) // final.callPackage ./lib.nix { };
+  debTools = (prev.debTools or { }) // (import ./lib {
+    pkgs = final;
+    inherit (final) lib;
+  });
 }
